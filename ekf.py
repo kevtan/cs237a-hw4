@@ -1,6 +1,7 @@
 import numpy as np
-import scipy.linalg    # you may find scipy.linalg.block_diag useful
+import scipy.linalg as la
 import turtlebot_model as tb
+import functools
 
 class Ekf(object):
     """
@@ -41,9 +42,11 @@ class Ekf(object):
 
         ########## Code starts here ##########
         # TODO: Update self.x, self.Sigma.
-
-
-        ########## Code ends here ##########
+        g, Gx, Gu = self.transition_model(u, dt)
+        self.x = g
+        x_uncertainty = np.matmul(np.matmul(Gx, self.Sigma), Gx.T)
+        u_uncertainty = dt * np.matmul(np.matmul(Gu, self.R), Gu.T)
+        self.Sigma = x_uncertainty + u_uncertainty
 
     def transition_model(self, u, dt):
         """
@@ -81,8 +84,11 @@ class Ekf(object):
 
         ########## Code starts here ##########
         # TODO: Update self.x, self.Sigma.
-
-
+        # uncertainty in the innovation (comes from sensor noise Q and position uncertainty H)
+        St = np.matmul(H, np.matmul(self.Sigma, H.T)) + Q
+        Kt = np.matmul(self.Sigma, np.matmul(H.T, np.linalg.inv(St)))
+        self.x += np.matmul(Kt, z)
+        self.Sigma -= np.matmul(Kt, np.matmul(St, Kt.T))
         ########## Code ends here ##########
 
     def measurement_model(self, z_raw, Q_raw):
@@ -134,8 +140,7 @@ class EkfLocalization(Ekf):
 
         ########## Code starts here ##########
         # TODO: Compute g, Gx, Gu using tb.compute_dynamics().
-
-
+        g, Gx, Gu = tb.compute_dynamics(self.x, u, dt)
         ########## Code ends here ##########
 
         return g, Gx, Gu
@@ -153,8 +158,9 @@ class EkfLocalization(Ekf):
 
         ########## Code starts here ##########
         # TODO: Compute z, Q.
-
-
+        z = np.concatenate(v_list)
+        Q = la.block_diag(Q_list)
+        H = np.concatenate(H_list)
         ########## Code ends here ##########
 
         return z, Q, H
@@ -165,9 +171,9 @@ class EkfLocalization(Ekf):
         to the closest map entry measured by Mahalanobis distance.
 
         Inputs:
-            z_raw: np.array[2,I]   - I lines extracted from scanner data in
+            z_raw: np.array[2,I]   - I lines extracted from scanner data in. EX: shape = (2, 2)
                                      columns representing (alpha, r) in the scanner frame.
-            Q_raw: [np.array[2,2]] - list of I covariance matrices corresponding
+            Q_raw: [np.array[2,2]] - list of I covariance matrices corresponding EX: shape = (2, 2, 2)
                                      to each (alpha, r) column of z_raw.
         Outputs:
             v_list: [np.array[2,]]  - list of at most I innovation vectors
@@ -191,12 +197,31 @@ class EkfLocalization(Ekf):
                 diff[idx] += sign * 2. * np.pi
             return diff
 
-        hs, Hs = self.compute_predicted_measurements()
-
+        hs, Hs = self.compute_predicted_measurements() # hs is shape (2, 15), a list [alpha_t, r_t] Hs is shape 15, 2, 3
         ########## Code starts here ##########
-        # TODO: Compute v_list, Q_list, H_list
 
-
+        def mahalanobis_distance(Q, v, h, H):
+            S = np.matmul(H, np.matmul(self.Sigma, H.T)) + Q
+            S_inv = np.linalg.inv(S)
+            return np.matmul(v.T, np.matmul(S_inv, v))
+        
+        v_list, Q_list, H_list = [], [], []
+        # z is the observed line parameters
+        # Q is the uncertainty in z
+        for z, Q in zip(z_raw.T, Q_raw):
+            # compute innovations
+            innovations = np.empty_like(hs.T)
+            innovations[:, 0] = angle_diff(z[0], hs[0])
+            innovations[:, 1] = z[1] - hs[1]
+            # compute associated mahalanobis distances
+            maha_dist = functools.partial(mahalanobis_distance, Q)
+            distances = np.fromiter(map(maha_dist, innovations, hs.T, Hs), np.float64)
+            # find the best fit and see if it satisfies min. requirements
+            index = np.argmin(distances)
+            if distances[index] < self.g ** 2:
+                v_list.append(innovations[index])
+                Q_list.append(Q)
+                H_list.append(Hs[index])
         ########## Code ends here ##########
 
         return v_list, Q_list, H_list
@@ -218,10 +243,8 @@ class EkfLocalization(Ekf):
         for j in range(self.map_lines.shape[1]):
             ########## Code starts here ##########
             # TODO: Compute h, Hx using tb.transform_line_to_scanner_frame().
-
-
+            h, Hx = tb.transform_line_to_scanner_frame(self.map_lines[:,j], self.x, self.tf_base_to_camera)
             ########## Code ends here ##########
-
             h, Hx = tb.normalize_line_parameters(h, Hx)
             hs[:,j] = h
             Hx_list.append(Hx)
@@ -236,7 +259,9 @@ class EkfSlam(Ekf):
 
     def __init__(self, x0, Sigma0, R, tf_base_to_camera, g):
         """
-        EKFSLAM constructor.
+        EKFSLAM constructor. Note that unlike the EKFLocalization class,
+        the EKFSLAM class does not have a map_lines field of map features
+        known a priori.
 
         Inputs:
                        x0: np.array[3+2J,]     - initial belief mean.
@@ -252,18 +277,17 @@ class EkfSlam(Ekf):
         super(self.__class__, self).__init__(x0, Sigma0, R)
 
     def transition_model(self, u, dt):
-        """
-        Combined Turtlebot + map dynamics.
-        Adapt this method from EkfLocalization.transition_model().
-        """
+        """Specifies how control input |u| updates the augmented state vector."""
         g = np.copy(self.x)
         Gx = np.eye(self.x.size)
         Gu = np.zeros((self.x.size, 2))
-
         ########## Code starts here ##########
         # TODO: Compute g, Gx, Gu.
-
-
+        robot_pose = self.x[:3]
+        g_robot, Gx_robot, Gu_robot = tb.compute_dynamics(robot_pose, u, dt, compute_jacobians=True)
+        g[:3] = g_robot
+        Gx[:3, :3] = Gx_robot
+        Gu[:3, :3] = Gu_robot
         ########## Code ends here ##########
 
         return g, Gx, Gu
@@ -288,16 +312,19 @@ class EkfSlam(Ekf):
 
         ########## Code starts here ##########
         # TODO: Compute z, Q, H.
+        z = np.concatenate(v_list)
+        Q = la.block_diag(*Q_list)
+        H = np.concatenate(H_list)
         # Hint: Should be identical to EkfLocalization.measurement_model().
-
-
         ########## Code ends here ##########
 
         return z, Q, H
 
     def compute_innovations(self, z_raw, Q_raw):
         """
-        Adapt this method from EkfLocalization.compute_innovations().
+        Parameters:
+        - z_raw: observed line parameters
+        - Q_raw: uncertainties in observed line parameters
         """
         def angle_diff(a, b):
             a = a % (2. * np.pi)
@@ -317,35 +344,56 @@ class EkfSlam(Ekf):
 
         ########## Code starts here ##########
         # TODO: Compute v_list, Q_list, H_list.
-
-
+        def mahalanobis_distance(Q, v, h, H):
+            S = np.matmul(H, np.matmul(self.Sigma, H.T)) + Q
+            S_inv = np.linalg.inv(S)
+            return np.matmul(v.T, np.matmul(S_inv, v))
+        
+        v_list, Q_list, H_list = [], [], []
+        # z is the observed line parameters
+        # Q is the uncertainty in z
+        for z, Q in zip(z_raw.T, Q_raw):
+            # compute innovations
+            innovations = np.empty_like(hs.T)
+            innovations[:, 0] = angle_diff(z[0], hs[0])
+            innovations[:, 1] = z[1] - hs[1]
+            # compute associated mahalanobis distances
+            maha_dist = functools.partial(mahalanobis_distance, Q)
+            distances = np.fromiter(map(maha_dist, innovations, hs.T, Hs), np.float64)
+            # find the best fit and see if it satisfies min. requirements
+            index = np.argmin(distances)
+            if distances[index] < self.g ** 2:
+                v_list.append(innovations[index])
+                Q_list.append(Q)
+                H_list.append(Hs[index])
         ########## Code ends here ##########
 
         return v_list, Q_list, H_list
 
     def compute_predicted_measurements(self):
         """
-        Adapt this method from EkfLocalization.compute_predicted_measurements().
+        Given the best estimate of the map features (found inside the augmented
+        state vector) and our current position (also inside the augmented state
+        vector), return |hs| representing the map features in the robot's frame
+        of reference and |Hx| representing how much |hs| changes with respect
+        to the augmented state vector.
         """
+        # number of map features
         J = (self.x.size - 3) // 2
         hs = np.zeros((2, J))
         Hx_list = []
+        # loop through all the features
         for j in range(J):
             idx_j = 3 + 2 * j
+            # extract best-estimate line parameters from augmented state vector
             alpha, r = self.x[idx_j:idx_j+2]
-
-            Hx = np.zeros((2,self.x.size))
-
-            ########## Code starts here ##########
-            # TODO: Compute h, Hx.
-
-
+            # compute h and Hx
+            Hx = np.zeros((2, self.x.size))
+            h, Hx_tb = tb.transform_line_to_scanner_frame((alpha, r), self.x[0:3], self.tf_base_to_camera)
             # First two map lines are assumed fixed so we don't want to propagate
             # any measurement correction to them.
             if j >= 2:
-                Hx[:,idx_j:idx_j+2] = np.eye(2)  # FIX ME!
-            ########## Code ends here ##########
-
+                Hx[:,idx_j:idx_j+2] = np.eye(2)
             h, Hx = tb.normalize_line_parameters(h, Hx)
             hs[:,j] = h
             Hx_list.append(Hx)

@@ -58,8 +58,7 @@ class ParticleFilter(object):
         ########## Code starts here ##########
         # TODO: Update self.xs.
         # Hint: Call self.transition_model().
-
-
+        self.transition_model(u, dt)
         ########## Code ends here ##########
 
     def transition_model(self, us, dt):
@@ -114,7 +113,6 @@ class ParticleFilter(object):
         #       without for loops. You may find np.linspace(), np.cumsum(), and
         #       np.searchsorted() useful. This results in a ~10x speedup.
 
-
         ########## Code ends here ##########
 
     def measurement_model(self, z_raw, Q_raw):
@@ -168,14 +166,21 @@ class MonteCarloLocalization(ParticleFilter):
 
         ########## Code starts here ##########
         # TODO: Compute g.
+        # TODO: Account for small omega
         # Hint: We don't need Jacobians for particle filtering.
         # Hint: To maximize speed, try to compute the dynamics without looping
         #       over the particles. If you do this, you should implement
         #       vectorized versions of the dynamics computations directly here
         #       (instead of modifying turtlebot_model). This results in a
         #       ~10x speedup.
-
-
+        x, y, theta = self.xs[:, 0], self.xs[:, 1], self.xs[:, 2]
+        v, omega = us[:, 0], us[:, 1]
+        theta_new = theta + omega * dt
+        costh, sinth = np.cos(theta), np.sin(theta)
+        costhn, sinthn = np.cos(theta_new), np.sin(theta_new)
+        x_new = x + (v / omega) * (sinthn - sinth)
+        y_new = y + (v / omega) * (costh - costhn)
+        g = np.stack((x_new, y_new, theta_new), axis=1)
         ########## Code ends here ##########
 
         return g
@@ -218,7 +223,7 @@ class MonteCarloLocalization(ParticleFilter):
             Q_raw: [np.array[2,2]] - list of I covariance matrices corresponding
                                      to each (alpha, r) column of z_raw.
         Outputs:
-            z: np.array[M,2I]  - joint measurement mean for M particles.
+            z: np.array[2I,]   - joint measurement mean.
             Q: np.array[2I,2I] - joint measurement covariance.
         """
         vs = self.compute_innovations(z_raw, np.array(Q_raw))
@@ -249,14 +254,9 @@ class MonteCarloLocalization(ParticleFilter):
             a = a % (2. * np.pi)
             b = b % (2. * np.pi)
             diff = a - b
-            if np.size(diff) == 1:
-                if np.abs(a - b) > np.pi:
-                    sign = 2. * (diff < 0.) - 1.
-                    diff += sign * 2. * np.pi
-            else:
-                idx = np.abs(diff) > np.pi
-                sign = 2. * (diff[idx] < 0.) - 1.
-                diff[idx] += sign * 2. * np.pi
+            idx = np.abs(diff) > np.pi
+            sign = 2. * (diff[idx] < 0.) - 1.
+            diff[idx] += sign * 2. * np.pi
             return diff
 
         ########## Code starts here ##########
@@ -268,7 +268,8 @@ class MonteCarloLocalization(ParticleFilter):
         #       Eliminating loops over I results in a ~2x speedup.
         #       Eliminating loops over M results in a ~5x speedup.
         #       Overall, that's 100x!
-
+        for zi, Qi in zip(z_raw, Q_raw):
+            vi = zi - 
 
         ########## Code ends here ##########
 
