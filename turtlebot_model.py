@@ -93,22 +93,19 @@ def transform_line_to_scanner_frame(line, x, tf_base_to_camera, compute_jacobian
     # compute the min distance frame line to camera origin
     a, b, c = -np.cos(alpha_w), -np.sin(alpha_w), r_w
     r_c = a * c_x + b * c_y + c
-    # compute h
     h = np.array([alpha_c, r_c])
-    # compute H
-    dr_dxbw = a
-    dr_dybw = b
-    dcx_dthetabw = -sinth * x_cb - costh * y_cb
-    dcy_dthetabw = costh * x_cb - sinth * y_cb
-    dr_dtheta_bw = a * dcx_dthetabw + b * dcy_dthetabw
-    Hx = np.array([
-        [0, 0, -1],
-        [dr_dxbw, dr_dybw, dr_dtheta_bw]
-    ])
-    ########## Code ends here ##########
-    if not compute_jacobian:
-        return h
-    return h, Hx
+    if compute_jacobian:
+        dr_dxbw = a
+        dr_dybw = b
+        dcx_dthetabw = -sinth * x_cb - costh * y_cb
+        dcy_dthetabw = costh * x_cb - sinth * y_cb
+        dr_dtheta_bw = a * dcx_dthetabw + b * dcy_dthetabw
+        Hx = np.array([
+            [0, 0, -1],
+            [dr_dxbw, dr_dybw, dr_dtheta_bw]
+        ])
+        return h, Hx
+    return h
 
 
 def normalize_line_parameters(h, Hx=None):

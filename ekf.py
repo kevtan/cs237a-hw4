@@ -284,7 +284,7 @@ class EkfSlam(Ekf):
         ########## Code starts here ##########
         # TODO: Compute g, Gx, Gu.
         robot_pose = self.x[:3]
-        g_robot, Gx_robot, Gu_robot = tb.compute_dynamics(robot_pose, u, dt, compute_jacobians=True)
+        g_robot, Gx_robot, Gu_robot = tb.compute_dynamics(robot_pose, u, dt)
         g[:3] = g_robot
         Gx[:3, :3] = Gx_robot
         Gu[:3, :3] = Gu_robot
@@ -389,7 +389,8 @@ class EkfSlam(Ekf):
             alpha, r = self.x[idx_j:idx_j+2]
             # compute h and Hx
             Hx = np.zeros((2, self.x.size))
-            h, Hx_tb = tb.transform_line_to_scanner_frame((alpha, r), self.x[0:3], self.tf_base_to_camera)
+            h, Hx_robot = tb.transform_line_to_scanner_frame((alpha, r), self.x[0:3], self.tf_base_to_camera)
+            Hx[:, :3] = Hx_robot
             # First two map lines are assumed fixed so we don't want to propagate
             # any measurement correction to them.
             if j >= 2:
