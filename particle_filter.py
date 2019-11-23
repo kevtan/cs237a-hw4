@@ -182,7 +182,6 @@ class MonteCarloLocalization(ParticleFilter):
         y_new = y + (v / omega) * (costh - costhn)
         g = np.stack((x_new, y_new, theta_new), axis=1)
         ########## Code ends here ##########
-
         return g
 
     def measurement_update(self, z_raw, Q_raw):
