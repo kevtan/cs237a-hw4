@@ -2,6 +2,7 @@ import numpy as np
 import scipy.linalg  # You may find scipy.linalg.block_diag useful
 import scipy.stats  # You may find scipy.stats.multivariate_normal.pdf useful
 import turtlebot_model as tb
+import functools
 
 EPSILON_OMEGA = 1e-3
 
@@ -58,6 +59,7 @@ class ParticleFilter(object):
         ########## Code starts here ##########
         # TODO: Update self.xs.
         # Hint: Call self.transition_model().
+        us = 
         self.transition_model(u, dt)
         ########## Code ends here ##########
 
@@ -112,7 +114,12 @@ class ParticleFilter(object):
         # Hint: To maximize speed, try to implement the resampling algorithm
         #       without for loops. You may find np.linspace(), np.cumsum(), and
         #       np.searchsorted() useful. This results in a ~10x speedup.
-
+        cumulative_weights = np.cumsum(ws)
+        delimiters = r * sum(ws) + np.linspace(0, sum(ws), self.M, False)
+        particle_indexes = np.searchsorted(cumulative_weights, delimiters)
+        for m in range(self.M):
+            self.xs[m] = xs[particle_indexes[m]]
+            self.ws[m] = ws[particle_indexes[m]]
         ########## Code ends here ##########
 
     def measurement_model(self, z_raw, Q_raw):
@@ -163,16 +170,7 @@ class MonteCarloLocalization(ParticleFilter):
                                propagated according to the system dynamics with
                                control u for dt seconds.
         """
-
-        ########## Code starts here ##########
-        # TODO: Compute g.
-        # TODO: Account for small omega
-        # Hint: We don't need Jacobians for particle filtering.
-        # Hint: To maximize speed, try to compute the dynamics without looping
-        #       over the particles. If you do this, you should implement
-        #       vectorized versions of the dynamics computations directly here
-        #       (instead of modifying turtlebot_model). This results in a
-        #       ~10x speedup.
+        g = np.empty_like(self.xs)
         x, y, theta = self.xs[:, 0], self.xs[:, 1], self.xs[:, 2]
         v, omega = us[:, 0], us[:, 1]
         theta_new = theta + omega * dt
@@ -181,7 +179,6 @@ class MonteCarloLocalization(ParticleFilter):
         x_new = x + (v / omega) * (sinthn - sinth)
         y_new = y + (v / omega) * (costh - costhn)
         g = np.stack((x_new, y_new, theta_new), axis=1)
-        ########## Code ends here ##########
         return g
 
     def measurement_update(self, z_raw, Q_raw):
@@ -253,10 +250,17 @@ class MonteCarloLocalization(ParticleFilter):
             a = a % (2. * np.pi)
             b = b % (2. * np.pi)
             diff = a - b
-            idx = np.abs(diff) > np.pi
-            sign = 2. * (diff[idx] < 0.) - 1.
-            diff[idx] += sign * 2. * np.pi
+            if np.size(diff) == 1:
+                if np.abs(a - b) > np.pi:
+                    sign = 2. * (diff < 0.) - 1.
+                    diff += sign * 2. * np.pi
+            else:
+                idx = np.abs(diff) > np.pi
+                sign = 2. * (diff[idx] < 0.) - 1.
+                diff[idx] += sign * 2. * np.pi
             return diff
+
+        hs_all = self.compute_predicted_measurements()
 
         ########## Code starts here ##########
         # TODO: Compute vs (with shape [M x I x 2]).
@@ -267,9 +271,19 @@ class MonteCarloLocalization(ParticleFilter):
         #       Eliminating loops over I results in a ~2x speedup.
         #       Eliminating loops over M results in a ~5x speedup.
         #       Overall, that's 100x!
-        for zi, Qi in zip(z_raw, Q_raw):
-            vi = zi - 
-
+        vs = np.empty((self.M, z_raw.shape[1], 2))
+        for i, hs in enumerate(hs_all):
+            for j, (z, Q) in enumerate(zip(z_raw.T, Q_raw)):
+                # assign every sensor measurement to map feature with MLE
+                innovations = np.empty_like(hs.T)
+                innovations[:, 0] = angle_diff(z[0], hs[0])
+                innovations[:, 1] = z[1] - hs[1]
+                # compute associated mahalanobis distances
+                Q_inv = np.linalg.inv(Q)
+                distances = (np.matmul(v.T, np.matmul(Q_inv, v)) for v in innovations)
+                distances = np.fromiter(distances, np.float64)
+                index = np.argmin(distances)
+                vs[i, j] = innovations[index]
         ########## Code ends here ##########
 
         # Reshape [M x I x 2] array to [M x 2I]
@@ -281,21 +295,24 @@ class MonteCarloLocalization(ParticleFilter):
         in the scanner frame so it can be associated with the lines extracted
         from the scanner measurements.
 
+        Note that with EKF-localization, we only had to convert the map features
+        once into another reference frame because we had a unimodal hypothesis
+        for where the robot is. With PF-localization, we need to do M conversions,
+        where M is the number of particles we have.
+
         Input:
             None
         Output:
             hs: np.array[M,2,J] - J line parameters in the scanner (camera) frame for M particles.
         """
-        ########## Code starts here ##########
-        # TODO: Compute hs.
-        # Hint: We don't need Jacobians for particle filtering.
-        # Hint: To maximize speed, try to compute the predicted measurements
-        #       without looping over the map lines. You can implement vectorized
-        #       versions of turtlebod_model functions directly here. This
-        #       results in a ~10x speedup.
-
-
-        ########## Code ends here ##########
-
-        return hs
+        J = self.map_lines.shape[1]
+        hs_all = np.empty((self.M, 2, J))
+        for index, particle in enumerate(self.xs):
+            hs = np.empty_like(self.map_lines)
+            for j, line in enumerate(self.map_lines.T):
+                h = tb.transform_line_to_scanner_frame(line, particle, self.tf_base_to_camera, False)
+                h = tb.normalize_line_parameters(h)
+                hs[:,j] = h
+            hs_all[index] = hs
+        return hs_all
 
