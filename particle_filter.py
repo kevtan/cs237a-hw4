@@ -1,8 +1,7 @@
 import numpy as np
-import scipy.linalg  # You may find scipy.linalg.block_diag useful
-import scipy.stats  # You may find scipy.stats.multivariate_normal.pdf useful
+import scipy.linalg as la  # You may find scipy.linalg.block_diag useful
+import scipy.stats as sa  # You may find scipy.stats.multivariate_normal.pdf useful
 import turtlebot_model as tb
-import functools
 
 EPSILON_OMEGA = 1e-3
 
@@ -59,8 +58,8 @@ class ParticleFilter(object):
         ########## Code starts here ##########
         # TODO: Update self.xs.
         # Hint: Call self.transition_model().
-        us = 
-        self.transition_model(u, dt)
+        us = np.random.multivariate_normal(u, self.R, self.M)
+        self.xs = self.transition_model(us, dt)
         ########## Code ends here ##########
 
     def transition_model(self, us, dt):
@@ -104,7 +103,6 @@ class ParticleFilter(object):
             None - internal belief state (self.xs, self.ws) should be updated.
         """
         r = np.random.rand() / self.M
-
         ########## Code starts here ##########
         # TODO: Update self.xs, self.ws.
         # Note: Assign the weights in self.ws to the corresponding weights in ws
@@ -170,8 +168,19 @@ class MonteCarloLocalization(ParticleFilter):
                                propagated according to the system dynamics with
                                control u for dt seconds.
         """
+
+        ########## Code starts here ##########
+        # # TODO: Compute g.
+        # Hint: We don't need Jacobians for particle filtering.
+        # Hint: To maximize speed, try to compute the dynamics without looping
+        #       over the particles. If you do this, you should implement
+        #       vectorized versions of the dynamics computations directly here
+        #       (instead of modifying turtlebot_model). This results in a
+        #       ~10x speedup.
         g = np.empty_like(self.xs)
         x, y, theta = self.xs[:, 0], self.xs[:, 1], self.xs[:, 2]
+        if len(us.shape) == 1:
+            us = us.reshape(1, len(us))
         v, omega = us[:, 0], us[:, 1]
         theta_new = theta + omega * dt
         costh, sinth = np.cos(theta), np.sin(theta)
@@ -202,8 +211,11 @@ class MonteCarloLocalization(ParticleFilter):
         # Hint: To maximize speed, implement this without looping over the
         #       particles. You may find scipy.stats.multivariate_normal.pdf()
         #       useful.
-
-
+        observations, covariance = self.measurement_model(z_raw, Q_raw)
+        mean = np.zeros_like(observations[0])
+        for index, observation in enumerate(observations):
+            weight = sa.multivariate_normal.pdf(observation, mean, covariance)
+            ws[index] = weight
         ########## Code ends here ##########
 
         self.resample(xs, ws)
@@ -219,21 +231,15 @@ class MonteCarloLocalization(ParticleFilter):
             Q_raw: [np.array[2,2]] - list of I covariance matrices corresponding
                                      to each (alpha, r) column of z_raw.
         Outputs:
-            z: np.array[2I,]   - joint measurement mean.
+            z: np.array[M,2I]  - joint measurement mean for M particles.
             Q: np.array[2I,2I] - joint measurement covariance.
         """
         vs = self.compute_innovations(z_raw, np.array(Q_raw))
-
-        ########## Code starts here ##########
-        # TODO: Compute Q.
-
-
-        ########## Code ends here ##########
-
+        Q = la.block_diag(*Q_raw)
         return vs, Q
 
     def compute_innovations(self, z_raw, Q_raw):
-        """
+        """p
         Given lines extracted from the scanner data, tries to associate each one
         to the closest map entry measured by Mahalanobis distance.
 
@@ -285,7 +291,6 @@ class MonteCarloLocalization(ParticleFilter):
                 index = np.argmin(distances)
                 vs[i, j] = innovations[index]
         ########## Code ends here ##########
-
         # Reshape [M x I x 2] array to [M x 2I]
         return vs.reshape((self.M,-1))  # [M x 2I]
 
@@ -294,11 +299,6 @@ class MonteCarloLocalization(ParticleFilter):
         Given a single map line in the world frame, outputs the line parameters
         in the scanner frame so it can be associated with the lines extracted
         from the scanner measurements.
-
-        Note that with EKF-localization, we only had to convert the map features
-        once into another reference frame because we had a unimodal hypothesis
-        for where the robot is. With PF-localization, we need to do M conversions,
-        where M is the number of particles we have.
 
         Input:
             None

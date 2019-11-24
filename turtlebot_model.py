@@ -16,8 +16,7 @@ def compute_dynamics(X, U, dt, compute_jacobians=True):
         Gx: np.array[3,3] - Jacobian of g with respect to x.
         Gu: np.array[3,2] - Jacobian of g with respect ot u.
     """
-    x, y, theta = X
-    v, omega = U
+    (x, y, theta), (v, omega) = X, U
     if abs(omega) < EPSILON_OMEGA:
         costh = np.cos(theta)
         sinth = np.sin(theta)
